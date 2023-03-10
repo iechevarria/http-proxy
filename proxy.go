@@ -30,5 +30,21 @@ func main() {
 	fmt.Println(nfd)
 	fmt.Println(sa)
 
-	fmt.Println(sock)
+	defer syscall.Close(sock)
+
+	for {
+		buf := make([]byte, 4096)
+		n, err := syscall.Read(nfd, buf)
+		if err != nil {
+			panic(err)
+		}
+
+		n, err = syscall.Write(nfd, buf[:n])
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Println(buf[:n])
+		fmt.Println(sock)
+	}
 }

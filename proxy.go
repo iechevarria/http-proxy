@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"syscall"
 )
@@ -13,7 +14,7 @@ type Request struct {
 	Target  string
 	Version string
 	Headers map[string]string
-	Body    []byte
+	Body    string
 }
 
 type Response struct {
@@ -21,29 +22,35 @@ type Response struct {
 	StatusCode string
 	StatusText string
 	Headers    map[string]string
-	Body       []byte
+	Body       string
 }
 
-func ReadHeaders(scanner *bufio.Scanner) map[string]string {
+func ReadHeaders(reader *bufio.Reader) (map[string]string, error) {
 	m := make(map[string]string)
-	for scanner.Scan() {
-		headerLine := strings.Split(scanner.Text(), ": ")
+	for {
+		hl, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		headerLine := strings.Split(hl, ": ")
 		if len(headerLine) != 2 {
 			break
 		}
 		m[headerLine[0]] = headerLine[1]
 		fmt.Println("RUN")
 	}
-	return m
+	return m, nil
 }
 
 func ReadRequest(request []byte) (*Request, error) {
-	reader := bytes.NewReader(request)
-	scanner := bufio.NewScanner(reader)
+	reader := bufio.NewReader(bytes.NewReader(request))
 
 	// Read start-line
-	scanner.Scan()
-	startLine := strings.Split(scanner.Text(), " ")
+	l, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	startLine := strings.Split(l, " ")
 	if len(startLine) != 3 {
 		return nil, fmt.Errorf("Wrong start line HTTP: %s", startLine)
 	}
@@ -51,29 +58,30 @@ func ReadRequest(request []byte) (*Request, error) {
 	r.Method = startLine[0]
 	r.Target = startLine[1]
 	r.Version = startLine[2]
-	fmt.Println(reader.Len())
 
 	// Read headers and body
-	r.Headers = ReadHeaders(scanner)
-
-	fmt.Println(reader.Len())
-	r.Body = make([]byte, reader.Len())
-	if reader.Len() > 0 {
-		_, err := reader.Read(r.Body)
-		if err != nil {
-			return nil, err
-		}
+	r.Headers, err = ReadHeaders(reader)
+	if err != nil {
+		return nil, err
 	}
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	r.Body = string(b)
 
 	return &r, nil
 }
 
 func ReadResponse(response []byte) (*Response, error) {
-	reader := bytes.NewReader(response)
-	scanner := bufio.NewScanner(reader)
+	reader := bufio.NewReader(bytes.NewReader(response))
 
-	scanner.Scan()
-	statusLine := strings.Split(scanner.Text(), " ")
+	// Read status line
+	l, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	statusLine := strings.Split(l, " ")
 	if len(statusLine) != 3 {
 		return nil, fmt.Errorf("Wrong status line HTTP: %s", statusLine)
 	}
@@ -83,15 +91,15 @@ func ReadResponse(response []byte) (*Response, error) {
 	r.StatusText = statusLine[2]
 
 	// Read headers and body
-	r.Headers = ReadHeaders(scanner)
-
-	r.Body = make([]byte, reader.Len())
-	if reader.Len() > 0 {
-		_, err := reader.Read(r.Body)
-		if err != nil {
-			return nil, err
-		}
+	r.Headers, err = ReadHeaders(reader)
+	if err != nil {
+		return nil, err
 	}
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	r.Body = string(b)
 
 	return &r, nil
 }

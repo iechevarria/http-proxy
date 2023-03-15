@@ -13,10 +13,33 @@ type Request struct {
 	Target  string
 	Version string
 	Headers map[string]string
+	Body    []byte
+}
+
+type Response struct {
+	Version    string
+	StatusCode string
+	StatusText string
+	Headers    map[string]string
+	Body       []byte
+}
+
+func ReadHeaders(scanner *bufio.Scanner) map[string]string {
+	m := make(map[string]string)
+	for scanner.Scan() {
+		headerLine := strings.Split(scanner.Text(), ": ")
+		if len(headerLine) != 2 {
+			break
+		}
+		m[headerLine[0]] = headerLine[1]
+		fmt.Println("RUN")
+	}
+	return m
 }
 
 func ReadRequest(request []byte) (*Request, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(request))
+	reader := bytes.NewReader(request)
+	scanner := bufio.NewScanner(reader)
 
 	// Read start-line
 	scanner.Scan()
@@ -28,15 +51,46 @@ func ReadRequest(request []byte) (*Request, error) {
 	r.Method = startLine[0]
 	r.Target = startLine[1]
 	r.Version = startLine[2]
+	fmt.Println(reader.Len())
 
-	// Read headers
-	r.Headers = make(map[string]string)
-	for scanner.Scan() {
-		headerLine := strings.Split(scanner.Text(), ": ")
-		if len(headerLine) != 2 {
-			continue
+	// Read headers and body
+	r.Headers = ReadHeaders(scanner)
+
+	fmt.Println(reader.Len())
+	r.Body = make([]byte, reader.Len())
+	if reader.Len() > 0 {
+		_, err := reader.Read(r.Body)
+		if err != nil {
+			return nil, err
 		}
-		r.Headers[headerLine[0]] = headerLine[1]
+	}
+
+	return &r, nil
+}
+
+func ReadResponse(response []byte) (*Response, error) {
+	reader := bytes.NewReader(response)
+	scanner := bufio.NewScanner(reader)
+
+	scanner.Scan()
+	statusLine := strings.Split(scanner.Text(), " ")
+	if len(statusLine) != 3 {
+		return nil, fmt.Errorf("Wrong status line HTTP: %s", statusLine)
+	}
+	var r Response
+	r.Version = statusLine[0]
+	r.StatusCode = statusLine[1]
+	r.StatusText = statusLine[2]
+
+	// Read headers and body
+	r.Headers = ReadHeaders(scanner)
+
+	r.Body = make([]byte, reader.Len())
+	if reader.Len() > 0 {
+		_, err := reader.Read(r.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &r, nil
@@ -72,11 +126,11 @@ func main() {
 			panic(err)
 		}
 		fmt.Println("-> got client request")
-		r, err := ReadRequest(buf[:n])
+		req, err := ReadRequest(buf[:n])
 		if err != nil {
 			panic(err)
 		}
-		fmt.Printf("%+v\n", r)
+		fmt.Printf("%+v\n", req)
 
 		// proxy to server
 		var sock2 int
@@ -115,6 +169,13 @@ func main() {
 			res += string(buf[:n])
 		}
 		syscall.Close(sock2)
+
+		resStruct, err := ReadResponse([]byte(res))
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%+v\n", resStruct)
+
 		fmt.Println("read server response <-")
 
 		// forward response back

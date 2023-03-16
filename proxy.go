@@ -37,7 +37,6 @@ func ReadHeaders(reader *bufio.Reader) (map[string]string, error) {
 			break
 		}
 		m[headerLine[0]] = headerLine[1]
-		fmt.Println("RUN")
 	}
 	return m, nil
 }
@@ -104,6 +103,51 @@ func ReadResponse(response []byte) (*Response, error) {
 	return &r, nil
 }
 
+func ProxyRequest(request []byte) ([]byte, error) {
+	// proxy to server
+	var sock int
+	var err error
+
+	// retry proxy conn on EINTR
+	success := false
+	for success != true {
+		sock, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		err = syscall.Connect(sock, &syscall.SockaddrInet4{Port: 9000, Addr: [4]byte{127, 0, 0, 1}})
+		if err == syscall.EINTR {
+			syscall.Close(sock)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		success = true
+	}
+	// send client request
+	_, err = syscall.Write(sock, request)
+	if err != nil {
+		return nil, err
+	}
+
+	// read the whole server response
+	var response []byte
+	buf := make([]byte, 2048)
+	n := 1
+	for n != 0 {
+		n, _, err = syscall.Recvfrom(sock, buf, 0)
+		if err != nil {
+			return nil, err
+		}
+		response = append(response, buf[:n]...)
+	}
+	syscall.Close(sock)
+
+	return response, nil
+}
+
 func main() {
 	fmt.Println("proxy starting")
 
@@ -128,7 +172,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		buf := make([]byte, 4096)
+		buf := make([]byte, 2048)
 		n, err := syscall.Read(nfd, buf)
 		if err != nil {
 			panic(err)
@@ -140,54 +184,20 @@ func main() {
 		}
 		fmt.Printf("%+v\n", req)
 
-		// proxy to server
-		var sock2 int
-		success := false
-		// retry proxy conn on EINTR
-		for success != true {
-			sock2, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
-			if err != nil {
-				panic(err)
-			}
-
-			err = syscall.Connect(sock2, &syscall.SockaddrInet4{Port: 9000, Addr: [4]byte{127, 0, 0, 1}})
-			if err == syscall.EINTR {
-				syscall.Close(sock2)
-				continue
-			}
-			if err != nil {
-				panic(err)
-			}
-			success = true
-		}
-		_, err = syscall.Write(sock2, buf[:n])
+		// proxy request along, get response
+		res, err := ProxyRequest(buf[:n])
 		if err != nil {
 			panic(err)
 		}
-		fmt.Println("fwd to server ->")
-
-		// read the whole response
-		var res string
-		n = 1
-		for n != 0 {
-			n, _, err = syscall.Recvfrom(sock2, buf, 0)
-			if err != nil {
-				panic(err)
-			}
-			res += string(buf[:n])
-		}
-		syscall.Close(sock2)
-
-		resStruct, err := ReadResponse([]byte(res))
+		resStruct, err := ReadResponse(res)
 		if err != nil {
 			panic(err)
 		}
 		fmt.Printf("%+v\n", resStruct)
-
 		fmt.Println("read server response <-")
 
 		// forward response back
-		_, err = syscall.Write(nfd, []byte(res))
+		_, err = syscall.Write(nfd, res)
 		if err != nil {
 			panic(err)
 		}

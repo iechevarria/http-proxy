@@ -150,6 +150,9 @@ func ProxyRequest(request []byte) ([]byte, error) {
 
 func main() {
 	fmt.Println("proxy starting")
+	prefix := "/chumba/"
+	// TODO: make this a response obj + marshal
+	cache := make(map[string][]byte)
 
 	// list on localhost 8080
 	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
@@ -184,11 +187,28 @@ func main() {
 		}
 		fmt.Printf("%+v\n", req)
 
-		// proxy request along, get response
-		res, err := ProxyRequest(buf[:n])
-		if err != nil {
-			panic(err)
+		// proxy request along or get cached result
+		var res []byte
+		var ok bool
+		if strings.HasPrefix(req.Target, prefix) {
+			res, ok = cache[req.Target]
+			if ok {
+				fmt.Printf("Returning cached result for %s\n", req.Target)
+			} else {
+				res, err = ProxyRequest(buf[:n])
+				if err != nil {
+					panic(err)
+				}
+				cache[req.Target] = res
+				fmt.Printf("Cached result for %s\n", req.Target)
+			}
+		} else {
+			res, err = ProxyRequest(buf[:n])
+			if err != nil {
+				panic(err)
+			}
 		}
+
 		resStruct, err := ReadResponse(res)
 		if err != nil {
 			panic(err)

@@ -103,31 +103,34 @@ func ReadResponse(response []byte) (*Response, error) {
 	return &r, nil
 }
 
-func ProxyRequest(request []byte) ([]byte, error) {
-	// proxy to server
+func NewConnectedSocket(port int, addr [4]byte) (int, error) {
 	var sock int
 	var err error
 
 	// retry proxy conn on EINTR
-	success := false
-	for success != true {
+	for {
 		sock, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
 		if err != nil {
-			return nil, err
+			return -1, err
 		}
 
-		err = syscall.Connect(sock, &syscall.SockaddrInet4{Port: 9000, Addr: [4]byte{127, 0, 0, 1}})
+		err = syscall.Connect(sock, &syscall.SockaddrInet4{Port: port, Addr: addr})
 		if err == syscall.EINTR {
 			syscall.Close(sock)
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return -1, err
 		}
-		success = true
+		break
 	}
+
+	return sock, nil
+}
+
+func ProxyRequest(sock int, request []byte) ([]byte, error) {
 	// send client request
-	_, err = syscall.Write(sock, request)
+	_, err := syscall.Write(sock, request)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +157,13 @@ func main() {
 	// TODO: make this a response obj + marshal
 	cache := make(map[string][]byte)
 
-	// list on localhost 8080
+	// open conn to backend
+	backendSock, err := NewConnectedSocket(9000, [4]byte{127, 0, 0, 1})
+	if err != nil {
+		panic(err)
+	}
+
+	// listen on localhost 8080
 	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		panic(err)
@@ -169,13 +178,13 @@ func main() {
 	}
 	defer syscall.Close(sock)
 
+	buf := make([]byte, 2048)
 	for {
 		// accept conn + read incoming req
 		nfd, _, err := syscall.Accept(sock)
 		if err != nil {
 			panic(err)
 		}
-		buf := make([]byte, 2048)
 		n, err := syscall.Read(nfd, buf)
 		if err != nil {
 			panic(err)
@@ -195,7 +204,7 @@ func main() {
 			if ok {
 				fmt.Printf("Returning cached result for %s\n", req.Target)
 			} else {
-				res, err = ProxyRequest(buf[:n])
+				res, err = ProxyRequest(backendSock, buf[:n])
 				if err != nil {
 					panic(err)
 				}
@@ -203,7 +212,7 @@ func main() {
 				fmt.Printf("Cached result for %s\n", req.Target)
 			}
 		} else {
-			res, err = ProxyRequest(buf[:n])
+			res, err = ProxyRequest(backendSock, buf[:n])
 			if err != nil {
 				panic(err)
 			}
